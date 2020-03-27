@@ -982,11 +982,12 @@ ssize_t fp_write(struct file *filp, const char __user *buf, size_t count, loff_t
 			// these preformatted packets go to one of the application interfaces
 			if( (lptr = send_packet( NOOP, FPM_DEV, 0, buf, count ) ) != NULL ) {
 				res = lptr->packet.size;
+				pr_debug("%s: routing packet from %s to %s (size=%d, data=%p)\n", __func__,
+					slot_to_string(lptr->packet.from), slot_to_string(lptr->packet.to), lptr->packet.size, lptr->packet.data );
 			} else {
 				res = -EFAULT;
+				pr_debug("%s: lptr is NULL\n", __func__);
 			}
-			pr_debug("%s: routing packet from %s to %s (size=%d, data=%p)\n", __func__,
-				slot_to_string(lptr->packet.from), slot_to_string(lptr->packet.to), lptr->packet.size, lptr->packet.data );
 			break;
 		case AUX_DEV:	// this is an illegal operation.
 			res = -EACCES;
