@@ -98,6 +98,7 @@ typedef struct display_s {			// this structure encapsulates the entire virtual d
 			auto_repeat:1,		// Auto Repeat mode is enabled
 			auto_scroll:1,		// Auto Scroll mode is enabled
 			aux_switch:1;		// Last known AUX switch status 
+		unsigned int right_margin_enable:1;
 		int	backlight_timeout;
 		int	rows;			// the number of rows the display has available
 		int	columns;		// the number of columns the display has available
@@ -133,6 +134,7 @@ void character( display_t *, int, int[] );
 void screen( display_t *, int, int[] );
 void inquiry( display_t *, int, int[] );
 void other( display_t *, int, int[] );
+void bgc( display_t *, int, int[] );
 
 #define ESC "\x1b"
 
@@ -147,6 +149,8 @@ typedef enum { CLEAR, SOFT_RESET, BACKLIGHT_ON, BACKLIGHT_OFF, AUTO_WRAP_ON, AUT
 		INQUIRE_ATTRIBUTES } screen_types;
 
 typedef enum { POWER_UP, INQUIRE_AUX, INQUIRE_HEATER, INQUIRE_TYPE, INQUIRE_FOCUS, PANEL_PRESENT } other_types;
+
+typedef enum { RIGHT_MARGIN_IMAGE_DISABLE, RIGHT_MARGIN_IMAGE_ENABLE } bgc_types;
 
 
 // #define REGEX_INIT { NULL, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0 }
@@ -210,6 +214,8 @@ static struct command_table_s {
 	{ "^" ESC "[[]c",		REGEX_INIT, 0, inquiry,         INQUIRE_TYPE },
 	{ "^" ESC "[[]Fn",		REGEX_INIT, 0, other,           INQUIRE_FOCUS },
 	{ "^" ESC "[[]5n",		REGEX_INIT, 0, other,           PANEL_PRESENT },
+	{ "^" ESC "[[]=42;23;0@",	REGEX_INIT, 0, bgc,		RIGHT_MARGIN_IMAGE_DISABLE },
+	{ "^" ESC "[[]=42;23;1@",	REGEX_INIT, 0, bgc,		RIGHT_MARGIN_IMAGE_ENABLE },
 };
 
 #define CMD_TAB_SIZE ( sizeof( cmd_tab ) / sizeof( cmd_tab[0]) )
@@ -792,6 +798,25 @@ void screen( display_t * disp, int type, int args[] )
 	}
 }
 
+void bgc( display_t * disp, int type, int args[] )
+{
+#ifdef DEBUG
+	int term = getterm( disp );
+#endif
+	int row;
+	int column;
+
+	switch( type ) {
+		case RIGHT_MARGIN_IMAGE_ENABLE:
+			DBG( "%s(%d): BGC-RMI ON \n", __func__, term );
+			disp->screen.right_margin_enable = 1;
+			break;
+		case RIGHT_MARGIN_IMAGE_DISABLE:
+			DBG( "%s(%d): BGC-RMI OFF \n", __func__, term );
+			disp->screen.right_margin_enable = 0;
+			break;
+	}
+}
 
 void inquiry( display_t *disp, int type, int args[] )
 {
@@ -1290,6 +1315,8 @@ void load_screen( int fd, int term )
 	xprintf( fd, ESC "[33%c",  hl( disp->cursor.blink ) );
 	// xprintf( fd, "", hl( disp->cursor.underline ) );
 	xprintf( fd, ESC "[%d;%df",  disp->cursor.row+1, disp->cursor.column+1 );
+
+	xprintf( fd, ESC "[=42;23;%d@", disp->screen.right_margin_enable);
 	
 	DBG("%s: Text loaded\n", __func__ );
 }
