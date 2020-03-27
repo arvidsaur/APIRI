@@ -1257,7 +1257,7 @@ fpui_set_cursor(display_data.file_descr, false);
 		char sh_cmd[400];
 		bool eth_if_changed = false, eth_dns_changed = false;
 		bool eth_enable = true;
-		char *eth_name = (screen_no == ETH1_SCREEN_ID)?"eth0":"eth1";
+		char *eth_name = (screen_no == ETH1_SCREEN_ID)?"eth1":"eth0";
 		int i;
 
 		switch (line_no) {
@@ -2147,7 +2147,7 @@ void update_ethernet_screen(void *arg)
 	sc_screen_line *pEthEditLine;
 	sc_line_field *pField;
 	char buffer[32], *match;
-	char *eth_name = (eth_screen_id == ETH1_SCREEN_ID)?"eth0":"eth1";
+	char *eth_name = (eth_screen_id == ETH1_SCREEN_ID)?"eth1":"eth0";
 	struct ifreq ifr;
 	int skfd;
 	int cursor_x, cursor_y;
@@ -2187,7 +2187,7 @@ void update_ethernet_screen(void *arg)
 					pField->type = kModifiable;
 				pField->temp_data = pField->internal_data = 0;
 				if (ifr.ifr_flags & IFF_UP) {
-					match = (eth_screen_id == ETH1_SCREEN_ID)?"eth0 inet dhcp":"eth1 inet dhcp";
+					match = (eth_screen_id == ETH1_SCREEN_ID)?"eth1 inet dhcp":"eth0 inet dhcp";
 					if (get_data_from_file("/etc/network/interfaces", match, rt_str, 256) > 0)
 						pField->temp_data = pField->internal_data = 2;
 					else
@@ -2512,7 +2512,7 @@ void update_ethernet_screen(void *arg)
 		/*
 		 * Default gateway address.
 		 */
-		match = (eth_screen_id == ETH1_SCREEN_ID)?"eth0\t00000000\t":"eth1\t00000000\t";
+		match = (eth_screen_id == ETH1_SCREEN_ID)?"eth1\t00000000\t":"eth0\t00000000\t";
 		if ( (get_data_from_file("/proc/net/route", match, rt_str, 256) > 0)
 			&& (sscanf(&rt_str[14],"%lx%X%*[^\n]\n", (unsigned long *)&gw_addr.s_addr, &rt_flgs) == 2)
 			&& (rt_flgs & (RTF_UP|RTF_GATEWAY)) ) {
@@ -2806,7 +2806,7 @@ void update_ethernet_screen(void *arg)
 		 */
 		struct eth_dev_stats stats;
 		memset(rt_str, 0, sizeof(rt_str));
-		match = (eth_screen_id == ETH1_SCREEN_ID)?"eth0:":"eth1:";
+		match = (eth_screen_id == ETH1_SCREEN_ID)?"eth1:":"eth0:";
 		if (get_data_from_file("/proc/net/dev", match, rt_str, 256) > 0) {
 #if INT_MAX == LONG_MAX
 			match = "%*s%llu%llu%u%u%u%u%u%u%llu%llu%u%u%u%u%u%u";
