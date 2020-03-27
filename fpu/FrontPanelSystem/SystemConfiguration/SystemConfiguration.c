@@ -292,8 +292,15 @@ int main( int argc, char * argv[] )
 	//
 	// NOTE when reading, we are reading preformatted read_packets.
 	//
-	if( (scm = open( "/dev/scm", O_RDWR | O_EXCL )) < 0) {
-	        fprintf( stderr, "%s: Open error - %s\n", argv[0], strerror( errno ) );
+	const int retries = 15;
+	for(int tries = 0; tries < retries; tries++) {
+		if((scm = open( "/dev/scm", O_RDWR | O_EXCL)) >= 0)
+			break; //for
+		fprintf( stderr, "%s: Open error - %s\n", argv[0], strerror( errno ) );
+		sleep(1);
+	}
+	if(scm < 0) {
+		printf("Cannot find device driver, terminating/n");
 		exit( 99 );
 	}
 

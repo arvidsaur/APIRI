@@ -117,9 +117,15 @@ int main( int argc, char * argv[] )
 		usage( argv[0] );
 		exit( 98 );
 	}
-
-	if( (fd = open( "/dev/fpm", O_RDWR | O_EXCL )) < 0 ) {
-	        perror( argv[0] );
+	const int retries = 15;
+	for(int tries = 0; tries < retries; tries++) {
+		if((fd = open( "/dev/fpm", O_RDWR | O_EXCL )) >= 0)
+			break; //for
+		perror(argv[0]);
+		sleep(1);
+	}
+	if(fd  < 0) {
+		printf("Cannot find device driver, terminating/n");
 		exit( 97 );
 	}
 
