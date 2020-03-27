@@ -183,7 +183,7 @@ static struct command_table_s {
 	{ "^" ESC "[[]H",		REGEX_INIT, 0, cursor_position,	HOME },
 	{ "^" ESC "[[]2J",		REGEX_INIT, 0, screen,		CLEAR },
 	{ "^" ESC "c",			REGEX_INIT, 0, screen,		SOFT_RESET },
-	{ "^" ESC "P[1-8][[]"/*([0-9]+[;])+[0-9]+f*/, REGEX_INIT, 7, character, COMPOSE_SPECIAL },
+	{ "^" ESC "P[1-8][[]([0-9]+[;])+[0-9]+f", REGEX_INIT, 9, character, COMPOSE_SPECIAL },
 	{ "^" ESC "[[]<[0-9]+V",	REGEX_INIT, 1, character,	DISPLAY_SPECIAL },
 	{ "^" ESC "[[]25h",		REGEX_INIT, 0, character,	BLINK_ON },
 	{ "^" ESC "[[]25l",		REGEX_INIT, 0, character,	BLINK_OFF },
@@ -681,15 +681,15 @@ void character( display_t *disp, int type, int args[] )
 	switch( type ) {
 		case COMPOSE_SPECIAL:
 			DBG( "%s(%d): SPC @ %d\n", __func__, term, args[0] );
-			for( i = 1; i < 7/*8*/; i++ ) {
-				disp->special_chars[args[0]][i] = args[i];
+			for( i = 1; i <= 8; i++ ) {
+				disp->special_chars[args[0] - 1][i] = args[i];
 			}
-			disp->special_chars[args[0]][0] = 1; //indicate configured
+			disp->special_chars[args[0] - 1][0] = 1; //indicate configured
 			break;
 		case DISPLAY_SPECIAL:
 			DBG( "%s(%d): SPD @ %d\n", __func__, term, args[0]);
-	    		disp->terminal[ disp->cursor.row ][ disp->cursor.column ].c = args[0];
-	    		disp->terminal[ disp->cursor.row ][ disp->cursor.column ].special = 1;
+			disp->terminal[ disp->cursor.row ][ disp->cursor.column ].c = args[0] - 1;
+			disp->terminal[ disp->cursor.row ][ disp->cursor.column ].special = 1;
 			get_cursor( disp, &row, &column );
 			set_cursor( disp, row, column+1 );	    		
 			break;
@@ -1256,8 +1256,8 @@ void load_screen( int fd, int term )
 	// send the special character definitions, if configured
 	for( i = 0; i < 8; i++ ) {
 		if (disp->special_chars[i][0] != 0) {
-			xprintf( fd, ESC "P%d[%d", i+1, disp->special_chars[i][0] );
-			for( j = 1; j < 8; j++ ) {
+			xprintf( fd, ESC "P%d[%d", i+1, disp->special_chars[i][1] );
+			for( j = 2; j <= 8; j++ ) {
 				xprintf( fd, ";%d", disp->special_chars[i][j] );
 			}
 			xprintf( fd, "f" );
@@ -1285,7 +1285,7 @@ void load_screen( int fd, int term )
 			}
 			
 			if( disp->terminal[r][c].special ) {
-				xprintf( fd, ESC "[<%dV", disp->terminal[r][c].c );
+				xprintf( fd, ESC "[<%dV", disp->terminal[r][c].c + 1);
 			} else {
 				DBG( "%s(%d): %c [0x%2.2x] @ (%d,%d) ul=%d bl=%d rv=%d\n", __func__, term,
 					disp->terminal[r][c].c, disp->terminal[r][c].c, r, c,
