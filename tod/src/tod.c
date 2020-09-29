@@ -33,6 +33,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <atc.h>
+#include <linux/rtc.h>
 #include "tod.h"
 
 #ifndef __isdigit_char
@@ -710,8 +711,34 @@ int tod_set(const struct timeval *tv, const int *tzsec_off)
                 tm.tm_isdst = -1;
                 if (mktime(&tm) == -1)
                         return -1;
-		tval.tv_sec += timezone - ((daylight && tm.tm_isdst)?3600:0);
-		settimeofday(&tval, NULL);
+        tval.tv_sec += timezone - ((daylight && tm.tm_isdst)?3600:0);
+        //settimeofday(&tval, NULL);
+        struct timespec tp;
+        tp.tv_sec = tval.tv_sec;
+        tp.tv_nsec = 0;
+        clock_settime(CLOCK_REALTIME, &tp);
+
+        // HW RTC synced hourly, so update it now
+        time_t t_of_day = time(NULL);
+        struct tm gm_time;
+        gmtime_r(&t_of_day, &gm_time);
+
+        int fd = open("/dev/rtc0", O_RDONLY);
+        if (fd >= 0)
+        {
+            struct rtc_time rtc;
+            rtc.tm_sec = gm_time.tm_sec;
+            rtc.tm_min = gm_time.tm_min;
+            rtc.tm_hour = gm_time.tm_hour;
+            rtc.tm_mday = gm_time.tm_mday;
+            rtc.tm_mon = gm_time.tm_mon;
+            rtc.tm_year = gm_time.tm_year;
+            rtc.tm_wday = gm_time.tm_wday;
+            rtc.tm_yday = gm_time.tm_yday;
+            rtc.tm_isdst = gm_time.tm_isdst;
+            ioctl(fd, RTC_SET_TIME, &rtc);
+            close(fd);
+        }
 	}
 	return 0;
 }
