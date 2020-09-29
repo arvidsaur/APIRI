@@ -1398,9 +1398,8 @@ fpui_set_cursor(display_data.file_descr, false);
 				if ((pCrt_field->type == kModified) || (pCrt_field->type == kModified2)) {
 					// change nameserver in /etc/resolv.conf
 					sprintf(sh_cmd,
-						"awk '{if($1==\"nameserver\")"
-						"{print \"nameserver %d.%d.%d.%d\";}else{print $0};next;}'"
-						" /etc/resolv.conf >/tmp/dns",
+						"[ -f \"/etc/resolv.conf\" ] && awk '{if($1==\"nameserver\"){print \"nameserver %d.%d.%d.%d\";}else{print $0};next;}' /etc/resolv.conf >/tmp/dns; "
+						"[ ! -f \"/etc/resolv.conf\" ] && echo \"nameserver %d.%d.%d.%d\" >/tmp/dns;",
 						pCrt_line->fields[ETH_NSADDR1_FIELD].temp_data,
 						pCrt_line->fields[ETH_NSADDR2_FIELD].temp_data,
 						pCrt_line->fields[ETH_NSADDR3_FIELD].temp_data,
