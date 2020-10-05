@@ -1171,7 +1171,7 @@ This function is used to actually send a request frame.
 /*****************************************************************************/
 
 /* TEG */
-/*static	int cnt = 0;*/
+static	int cnt = 0;
 /* TEG */
 void
 fiomsg_tx_send_frame
@@ -1182,14 +1182,14 @@ fiomsg_tx_send_frame
 {
 	int status;
 
-	pr_debug("tx_send_frame(%lu) #%d, freq=%d len=%d: %x %x %x\n",
-		FIOMSG_TIME_TO_NSECS(FIOMSG_CURRENT_TIME), p_tx_frame->frame[2], p_tx_frame->cur_freq, p_tx_frame->len,
-		p_tx_frame->frame[0], p_tx_frame->frame[1], p_tx_frame->frame[2]);
+//	pr_debug("tx_send_frame(%lu) #%d, freq=%d len=%d: %x %x %x\n",
+//		FIOMSG_TIME_TO_NSECS(FIOMSG_CURRENT_TIME), p_tx_frame->frame[2], p_tx_frame->cur_freq, p_tx_frame->len,
+//		p_tx_frame->frame[0], p_tx_frame->frame[1], p_tx_frame->frame[2]);
 	if( (status = sdlc_kernel_write(p_port->context, FIOMSG_PAYLOAD(p_tx_frame), p_tx_frame->len)) < 0 )
 		printk( KERN_ALERT "write error %d", status );
 	/* TEG */
-	/*FIOMSG_FRAME	*p_payload = FIOMSG_PAYLOAD( p_tx_frame );
-	printk( KERN_ALERT "Frame (%d, %d) sending, jiffies(%lu)\n", p_payload->frame_no, cnt++, FIOMSG_CURRENT_TIME );*/
+	FIOMSG_FRAME	*p_payload = FIOMSG_PAYLOAD( p_tx_frame );
+	printk( KERN_ALERT "Frame (%d, %d) sending, jiffies(%lu)\n", p_payload->frame_no, cnt++, FIOMSG_CURRENT_TIME );
 	/* TEG */
 }
 
@@ -1381,8 +1381,8 @@ fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg arg )
 	p_port->rx_use_pend = 1 - p_port->rx_use_pend;
 
 	/* TEG DEL */
-	/*pr_debug( KERN_ALERT "RX frame task! jiffies(%lu); pend: fiod(%d), frame_no(%d)\n",
-			FIOMSG_CURRENT_TIME, p_rx_pend->fiod, p_rx_pend->frame_no );*/
+	pr_debug( KERN_ALERT "RX frame task! jiffies(%lu); pend: fiod(%d), frame_no(%d)\n",
+			FIOMSG_CURRENT_TIME, p_rx_pend->fiod.fiod, p_rx_pend->frame_no );
 	/* TEG DEL */
 
 	/* Read frame if present */
@@ -1396,7 +1396,7 @@ fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg arg )
 		{
 			/* We got the frame we wanted */
 			p_rx_pend->frame_len = len;
-			/*pr_debug( KERN_ALERT "Got RX frame(%llu) #%d\n", FIOMSG_CURRENT_TIME.tv64, rx_frame->frame_no);*/
+			pr_debug( KERN_ALERT "Got RX frame(%llu) #%d\n", FIOMSG_CURRENT_TIME.tv64, rx_frame->frame_no);
 			/* Now copy into the appropriate RX frame list */
 			fiomsg_rx_update_frame( p_port, p_rx_pend, true );
 			/* Update rx success count */
