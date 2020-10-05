@@ -1316,25 +1316,25 @@ fiomsg_rx_read_frame
 	int len = 0;
 	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
 
-	if (len > 0)
-	{
-		return len;
-	}
-
-	udelay(500);
-	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
-	pr_debug("fiomsg_rx_read_frame: retry read got %i\n", len);
-
-	if (len > 0)
-	{
-		return len;
-	}
-
-	udelay(500);
-	unsigned long microburst = 100;
-	int status = sdlc_kernel_ioctl(p_port->context, 12, &microburst);
-	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
-	pr_debug("fiomsg_rx_read_frame: retry read ioctl %i with microburst got %i\n", status, len);
+//	if (len > 0)
+//	{
+//		return len;
+//	}
+//
+//	udelay(500);
+//	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
+//	pr_debug("fiomsg_rx_read_frame: retry read got %i\n", len);
+//
+//	if (len > 0)
+//	{
+//		return len;
+//	}
+//
+//	udelay(500);
+//	unsigned long microburst = 100;
+//	int status = sdlc_kernel_ioctl(p_port->context, 12, &microburst);
+//	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
+//	pr_debug("fiomsg_rx_read_frame: retry read ioctl %i with microburst got %i\n", status, len);
 
 
 	if (len <= 0)
