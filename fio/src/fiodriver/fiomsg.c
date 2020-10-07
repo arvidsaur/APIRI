@@ -39,7 +39,6 @@ TEG - NO LOCKING IS IN PLACE.  THIS IS NOT AN ISSUE FOR INITIAL DEVELOPMENT
 /* System includes. */
 #include	<linux/fs.h>		/* File System Definitions */
 #include	<linux/poll.h>
-#include	<linux/delay.h>
 #include	"atc_spxs.h"
 
 /* Local includes. */
@@ -68,6 +67,7 @@ int fio_port[] =
 /* FIOMSG TX / RX tasks when kernel timers fires */
 fiomsg_timer_callback_rtn fiomsg_tx_task( fiomsg_timer_callback_arg );
 fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg );
+fiomsg_timer_callback_rtn fiomsg_rx_retry_task( fiomsg_timer_callback_arg );
 
 bool fiomsg_port_open( FIOMSG_PORT * );
 
@@ -426,7 +426,7 @@ fiomsg_tx_next_when
 			    p_n_dt->command_time;	/* Next frame command time */
 
 		us_dt = p_c_dt->command_time +	/* Current frame command time */
-				max( 500L, us_dt);		/* TS2 minimum dead-time 0.5ms */
+				+ 500 + us_dt;//max( 500L, us_dt);		/* TS2 minimum dead-time 0.5ms */
 
 		/* This needs to be converted to jiffies now */
 		/* Any fraction is considered to be another tick */
@@ -614,6 +614,10 @@ fiomsg_rx_set_port_timer
 		p_rx_pend->fiod = p_tx_frame->fiod;
 
 		p_timer->function = fiomsg_rx_task;
+
+		if(FIOMSG_PAYLOAD( p_tx_frame )->frame_no >= 20 && FIOMSG_PAYLOAD( p_tx_frame )->frame_no <= 27) {
+			next_when.tv64 = next_when.tv64 - 1000000; // 1000 microseconds before read op
+		}
 
 		/* Set the timer to go off when the response should be totally RXed */
 		FIOMSG_TIMER_START(p_timer,next_when);
@@ -1189,7 +1193,7 @@ fiomsg_tx_send_frame
 		printk( KERN_ALERT "write error %d", status );
 	/* TEG */
 	FIOMSG_FRAME	*p_payload = FIOMSG_PAYLOAD( p_tx_frame );
-	printk( KERN_ALERT "Frame (%d, %d) sending, jiffies(%lu)\n", p_payload->frame_no, cnt++, FIOMSG_CURRENT_TIME );
+	printk( KERN_ALERT "Frame (%d, %d) sending, jiffies(%llu)\n", p_payload->frame_no, cnt++, FIOMSG_CURRENT_TIME.tv64 );
 	/* TEG */
 }
 
@@ -1314,33 +1318,9 @@ fiomsg_rx_read_frame
 )
 {
 	int len = 0;
-	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
 
-//	if (len > 0)
-//	{
-//		return len;
-//	}
-//
-//	udelay(500);
-//	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
-//	pr_debug("fiomsg_rx_read_frame: retry read got %i\n", len);
-//
-//	if (len > 0)
-//	{
-//		return len;
-//	}
-//
-//	udelay(500);
-//	unsigned long microburst = 100;
-//	int status = sdlc_kernel_ioctl(p_port->context, 12, &microburst);
-//	len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer));
-//	pr_debug("fiomsg_rx_read_frame: retry read ioctl %i with microburst got %i\n", status, len);
-
-
-	if (len <= 0)
-	{
+	if ((len = sdlc_kernel_read(p_port->context, p_port->rx_buffer, sizeof(p_port->rx_buffer))) <= 0)
 		return 0;
-	}
 	
 	return (len);		/* Show read */
 }
@@ -1367,6 +1347,77 @@ fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg arg )
 						/* Port being worked on */
 	FIOMSG_PORT		*p_port;
 	FIOMSG_RX_PENDING	*p_rx_pend;	/* Which RX Buffer to use */
+	int                     len = 0;
+	/* Awoken, timer has fired */
+
+	/* Lock resources */
+	/* TEG - DO NOT LOCK SEMAPHORES, MUST USE SPINLOCKS */
+
+	/* Get Pointer to RX Pend buffer to use */
+	p_rx_pend = container_of((FIOMSG_TIMER *)arg, FIOMSG_RX_PENDING, rx_timer);
+	p_port = FIOMSG_P_PORT(p_rx_pend->fiod.port);
+	p_rx_pend = &p_port->rx_pend[ p_port->rx_use_pend ];
+	//p_port->rx_use_pend = 1 - p_port->rx_use_pend;
+
+	/* TEG DEL */
+	pr_debug( KERN_ALERT "RX frame task! jiffies(%llu); pend: fiod(%d), frame_no(%d)\n",
+			FIOMSG_CURRENT_TIME.tv64, p_rx_pend->fiod.fiod, p_rx_pend->frame_no );
+	/* TEG DEL */
+
+	/* Read frame if present */
+	while ( (len = fiomsg_rx_read_frame(p_port)) )
+	{
+		/* We read a frame.  Make sure it is the frame we are expecting */
+		FIOMSG_FRAME	*rx_frame = (FIOMSG_FRAME *)(p_port->rx_buffer);
+
+		/* Is this the frame we were expecting */
+		if ( rx_frame->frame_no == p_rx_pend->frame_no )
+		{
+			/* We got the frame we wanted */
+			p_port->rx_use_pend = 1 - p_port->rx_use_pend;
+			p_rx_pend->frame_len = len;
+			pr_debug( KERN_ALERT "Got RX frame(%llu) #%d\n", FIOMSG_CURRENT_TIME.tv64, rx_frame->frame_no);
+			/* Now copy into the appropriate RX frame list */
+			fiomsg_rx_update_frame( p_port, p_rx_pend, true );
+			/* Update rx success count */
+			FIOMSG_TIMER_CALLBACK_RTN;
+		}
+		/* Not the frame we expected, therefore ignore this frame */
+		pr_debug( KERN_ALERT "Dumping RX frame(%llu) #%d, expected #%d\n", FIOMSG_CURRENT_TIME.tv64,
+				rx_frame->frame_no, p_rx_pend->frame_no);
+	}
+
+	/* No frame to read, show no response */
+	pr_debug( KERN_ALERT "No RX frame read!(%llu), expected #%d\n", FIOMSG_CURRENT_TIME.tv64,
+			p_rx_pend->frame_no);
+
+	if(p_rx_pend->frame_no-128 >= 20 && p_rx_pend->frame_no-128 <= 27) {
+		/* BURST */
+		unsigned long microburst = 100;
+		int status = sdlc_kernel_ioctl(p_port->context, 12, &microburst);
+
+		/* Schedule the retry function */
+		FIOMSG_TIMER	*p_timer = &p_rx_pend->rx_timer;
+		p_timer->function = fiomsg_rx_retry_task;
+
+		FIOMSG_TIME next_when = FIOMSG_TIME_ADD_USECS(FIOMSG_CURRENT_TIME, 500);
+		FIOMSG_TIMER_START(p_timer,next_when);
+	}
+	else {
+		p_port->rx_use_pend = 1 - p_port->rx_use_pend;
+		/* Update rx error count */
+		fiomsg_rx_update_frame( p_port, p_rx_pend, false );
+	}
+	/* Unlock resources */
+	/* TEG - DO NOT LOCK SEMAPHORES, MUST USE SPINLOCKS */
+	FIOMSG_TIMER_CALLBACK_RTN;
+}
+
+fiomsg_timer_callback_rtn fiomsg_rx_retry_task( fiomsg_timer_callback_arg arg )
+{
+						/* Port being worked on */
+	FIOMSG_PORT		*p_port;
+	FIOMSG_RX_PENDING	*p_rx_pend;	/* Which RX Buffer to use */
 	int			frames_read = 0;
 	int                     len = 0;
 	/* Awoken, timer has fired */
@@ -1381,8 +1432,8 @@ fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg arg )
 	p_port->rx_use_pend = 1 - p_port->rx_use_pend;
 
 	/* TEG DEL */
-	pr_debug( KERN_ALERT "RX frame task! jiffies(%lu); pend: fiod(%d), frame_no(%d)\n",
-			FIOMSG_CURRENT_TIME, p_rx_pend->fiod.fiod, p_rx_pend->frame_no );
+	pr_debug( KERN_ALERT "RX frame task! jiffies(%llu); pend: fiod(%d), frame_no(%d)\n",
+			FIOMSG_CURRENT_TIME.tv64, p_rx_pend->fiod.fiod, p_rx_pend->frame_no );
 	/* TEG DEL */
 
 	/* Read frame if present */
@@ -1403,13 +1454,13 @@ fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg arg )
 			FIOMSG_TIMER_CALLBACK_RTN;
 		}
 		/* Not the frame we expected, therefore ignore this frame */
-		pr_debug( KERN_ALERT "Dumping RX frame(%lu) #%d, expected #%d\n", FIOMSG_TIME_TO_NSECS(FIOMSG_CURRENT_TIME),
+		pr_debug( KERN_ALERT "Dumping RX frame(%llu) #%d, expected #%d\n", FIOMSG_CURRENT_TIME.tv64,
 				rx_frame->frame_no, p_rx_pend->frame_no);
 		frames_read++;
 	}
 	if( frames_read == 0 ) {
 		/* No frame to read, show no response */
-		pr_debug( KERN_ALERT "No RX frame read!(%lu), expected #%d\n", FIOMSG_TIME_TO_NSECS(FIOMSG_CURRENT_TIME),
+		pr_debug( KERN_ALERT "No RX frame read!(%llu), expected #%d\n", FIOMSG_CURRENT_TIME.tv64,
 				p_rx_pend->frame_no);
 		/* Update rx error count */
 		fiomsg_rx_update_frame( p_port, p_rx_pend, false );
