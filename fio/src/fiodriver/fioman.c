@@ -633,6 +633,7 @@ fioman_add_def_port_frames
 			void	*tx_frame;	/* Pointer for alloc'ed frame 9 */
 
 			/* Ready frame 9 for this port */
+			// TODO figure out frame removal, for now let's just assume we are always on
 			if(!fioman_frame_is_scheduled_on_port(p_fiod, FIOMAN_FRAME_NO_9)) {
 				tx_frame = fioman_ready_frame_9(p_fiod);
 
