@@ -426,7 +426,7 @@ fiomsg_tx_next_when
 			    p_n_dt->command_time;	/* Next frame command time */
 
 		us_dt = p_c_dt->command_time +	/* Current frame command time */
-				+ 500 + us_dt;//max( 500L, us_dt);		/* TS2 minimum dead-time 0.5ms */
+				max( 500L, us_dt);		/* TS2 minimum dead-time 0.5ms */
 
 		/* This needs to be converted to jiffies now */
 		/* Any fraction is considered to be another tick */
@@ -616,7 +616,8 @@ fiomsg_rx_set_port_timer
 		p_timer->function = fiomsg_rx_task;
 
 		if(FIOMSG_PAYLOAD( p_tx_frame )->frame_no >= 20 && FIOMSG_PAYLOAD( p_tx_frame )->frame_no <= 27) {
-			next_when.tv64 = next_when.tv64 - 1000000; // 1000 microseconds before read op
+//			next_when.tv64 = next_when.tv64 - 1000000; // 1000 microseconds before read op
+            next_when = FIOMSG_TIME_SUB_USECS(next_when, 1000); // 1000 microseconds before read op
 		}
 
 		/* Set the timer to go off when the response should be totally RXed */
