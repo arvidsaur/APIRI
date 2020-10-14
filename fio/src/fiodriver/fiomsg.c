@@ -230,14 +230,14 @@ static	FIOMSG_TX_DEAD_TIME_CALC	dead_time[] =
 	{  500/*was 500*/, 1000,  500 },	/*  17 */
 	{   2000/*was 500*/,    0,  360 },	/*  18 - NEMA-TS2 */
 	{  500/*was 500*/, 1000,  500 },	/*  19 */
-	{  4000/*was 500*/, 4715,  360 },	/*  20 - NEMA-TS2 */
-	{  4000/*was 500*/, 4715,  360 },	/*  21 - NEMA-TS2 */
-	{  4000/*was 500*/, 4715,  360 },	/*  22 - NEMA-TS2 */
-	{  4000/*was 500*/, 4715,  360 },	/*  23 - NEMA-TS2 */
-	{  2000/*was 500*/, 3453,  412 },	/*  24 - NEMA-TS2 */
-	{  2000/*was 500*/, 3453,  412 },	/*  25 - NEMA-TS2 */
-	{  2000/*was 500*/, 3453,  412 },	/*  26 - NEMA-TS2 */
-	{  2000/*was 500*/, 3453,  412 },	/*  27 - NEMA-TS2 */
+	{  2000/*was 500*/, 2715,  360 },	/*  20 - NEMA-TS2 */
+	{  2000/*was 500*/, 2715,  360 },	/*  21 - NEMA-TS2 */
+	{  2000/*was 500*/, 2715,  360 },	/*  22 - NEMA-TS2 */
+	{  2000/*was 500*/, 2715,  360 },	/*  23 - NEMA-TS2 */
+	{  500/*was 500*/, 1453,  412 },	/*  24 - NEMA-TS2 */
+	{  500/*was 500*/, 1453,  412 },	/*  25 - NEMA-TS2 */
+	{  500/*was 500*/, 1453,  412 },	/*  26 - NEMA-TS2 */
+	{  500/*was 500*/, 1453,  412 },	/*  27 - NEMA-TS2 */
 	{  500/*was 500*/, 1000,  500 },	/*  28 */
 	{  500/*was 500*/, 1000,  500 },	/*  29 */
 	{  500/*was 500*/, 1957,  360 },	/*  30 - NEMA-TS2 */
@@ -422,6 +422,7 @@ fiomsg_tx_next_when
 
 		/* us_dt is the dead_time in microseconds */
 		us_dt =	p_c_dt->service_time +		/* Current service time */
+				1000 +			/* 1000 us buffer for burst retry scheduling */
 			    p_c_dt->response_time -	/* Current response time */
 			    p_n_dt->command_time;	/* Next frame command time */
 
@@ -551,6 +552,7 @@ fiomsg_rx_next_when
 
 		us_dt = p_c_dt->command_time +		/* Current frame command time */
 				p_c_dt->service_time +	/* Current service time */
+				1000 +			/* 1000 us buffer for burst retry scheduling */
 			    p_c_dt->response_time;	/* Current response time */
 
 		/* us_dt is a the dead_time in microseconds */
@@ -615,10 +617,7 @@ fiomsg_rx_set_port_timer
 
 		p_timer->function = fiomsg_rx_task;
 
-		if(FIOMSG_PAYLOAD( p_tx_frame )->frame_no >= 20 && FIOMSG_PAYLOAD( p_tx_frame )->frame_no <= 27) {
-//			next_when.tv64 = next_when.tv64 - 1000000; // 1000 microseconds before read op
-            next_when = FIOMSG_TIME_SUB_USECS(next_when, 1000); // 1000 microseconds before read op
-		}
+		next_when = FIOMSG_TIME_SUB_USECS(next_when, 1000); // 1000 microseconds before read op
 
 		/* Set the timer to go off when the response should be totally RXed */
 		FIOMSG_TIMER_START(p_timer,next_when);
@@ -1392,23 +1391,17 @@ fiomsg_timer_callback_rtn fiomsg_rx_task( fiomsg_timer_callback_arg arg )
 	pr_debug( KERN_ALERT "No RX frame read!(%llu), expected #%d\n", FIOMSG_CURRENT_TIME.tv64,
 			p_rx_pend->frame_no);
 
-	if(p_rx_pend->frame_no-128 >= 20 && p_rx_pend->frame_no-128 <= 27) {
-		/* BURST */
-		unsigned long microburst = 100;
-		int status = sdlc_kernel_ioctl(p_port->context, 12, &microburst);
+	/* BURST */
+	unsigned long microburst = 100;
+	int status = sdlc_kernel_ioctl(p_port->context, 12, &microburst);
 
-		/* Schedule the retry function */
-		FIOMSG_TIMER	*p_timer = &p_rx_pend->rx_timer;
-		p_timer->function = fiomsg_rx_retry_task;
+	/* Schedule the retry function */
+	FIOMSG_TIMER	*p_timer = &p_rx_pend->rx_timer;
+	p_timer->function = fiomsg_rx_retry_task;
 
-		FIOMSG_TIME next_when = FIOMSG_TIME_ADD_USECS(FIOMSG_CURRENT_TIME, 500);
-		FIOMSG_TIMER_START(p_timer,next_when);
-	}
-	else {
-		p_port->rx_use_pend = 1 - p_port->rx_use_pend;
-		/* Update rx error count */
-		fiomsg_rx_update_frame( p_port, p_rx_pend, false );
-	}
+	FIOMSG_TIME next_when = FIOMSG_TIME_ADD_USECS(FIOMSG_CURRENT_TIME, 500);
+	FIOMSG_TIMER_START(p_timer,next_when);
+
 	/* Unlock resources */
 	/* TEG - DO NOT LOCK SEMAPHORES, MUST USE SPINLOCKS */
 	FIOMSG_TIMER_CALLBACK_RTN;
