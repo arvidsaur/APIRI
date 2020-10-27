@@ -44,6 +44,7 @@
 #include <net/route.h>
 #include <net/if.h>
 #include <linux/sockios.h>
+#include <linux/rtc.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <libgen.h>
@@ -1189,11 +1190,34 @@ fpui_set_cursor(display_data.file_descr, false);
 			/* Update the new date-time to the system. */
 			t_of_day = mktime(&local_time);
 
-			time_sec.tv_sec = t_of_day;
-			time_sec.tv_usec = 0;
-			if (settimeofday(&time_sec, NULL) != 0) {
+			struct timespec tp;
+			tp.tv_sec = t_of_day;
+			tp.tv_nsec = 0;
+			if(clock_settime(CLOCK_REALTIME, &tp) != 0) {
 				/* TODO: Handle some commit errors here. */
 				break;
+			}
+
+			// HW RTC synced hourly, so update it now
+			t_of_day = time(NULL);
+			pLocalDateTime = gmtime(&t_of_day);
+			struct tm gm_time = *pLocalDateTime;
+
+			int fd = open("/dev/rtc0", O_RDONLY);
+			if (fd >= 0)
+			{
+				struct rtc_time rtc;
+				rtc.tm_sec = gm_time.tm_sec;
+				rtc.tm_min = gm_time.tm_min;
+				rtc.tm_hour = gm_time.tm_hour;
+				rtc.tm_mday = gm_time.tm_mday;
+				rtc.tm_mon = gm_time.tm_mon;
+				rtc.tm_year = gm_time.tm_year;
+				rtc.tm_wday = gm_time.tm_wday;
+				rtc.tm_yday = gm_time.tm_yday;
+				rtc.tm_isdst = gm_time.tm_isdst;
+				ioctl(fd, RTC_SET_TIME, &rtc);
+				close(fd);
 			}
 		}
 
