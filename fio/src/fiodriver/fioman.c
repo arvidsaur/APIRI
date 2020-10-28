@@ -115,6 +115,39 @@ fioman_frame_is_scheduled
 }
 
 /*****************************************************************************/
+/*
+Function to find if a frame is scheduled for a given port (not per fio device)
+*/
+/*****************************************************************************/
+
+bool
+fioman_frame_is_scheduled_on_port
+        (
+                FIOMAN_SYS_FIOD *p_sys_fiod,
+                int frame_no
+        )
+{
+    struct list_head	*p_elem;	/* Ptr to queue element being examined */
+    struct list_head	*p_next;	/* Temp Ptr to next for loop */
+    FIOMSG_TX_FRAME		*p_tx_elem;	/* Ptr to tx frame being examined */
+    FIOMSG_PORT		*p_port;	/* Port of Request Queue */
+
+    /* Search for frame in tx queue */
+    /* Get port to work on */
+    p_port = FIOMSG_P_PORT( p_sys_fiod->fiod.port );
+    /* For each element in the queue */
+    list_for_each_safe( p_elem, p_next, &p_port->tx_queue ) {
+        /* Get the request frame for this queue element */
+        p_tx_elem = list_entry( p_elem, FIOMSG_TX_FRAME, elem );
+        /* Does the frame number match one requested? */
+        if (FIOMSG_PAYLOAD( p_tx_elem )->frame_no == frame_no) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*****************************************************************************/
 
 /*****************************************************************************/
 /*
@@ -600,28 +633,31 @@ fioman_add_def_port_frames
 			void	*tx_frame;	/* Pointer for alloc'ed frame 9 */
 
 			/* Ready frame 9 for this port */
-			tx_frame = fioman_ready_frame_9( p_fiod );
+			if(!fioman_frame_is_scheduled_on_port(p_fiod, FIOMAN_FRAME_NO_9)) {
+				tx_frame = fioman_ready_frame_9(p_fiod);
 
-			/* Make sure frame was created */
-			/* If not system will fail */
-			if ( IS_ERR( tx_frame ) )
-			{
-				/* Return failure */
-				return ( PTR_ERR( tx_frame ) );
+				/* Make sure frame was created */
+				/* If not system will fail */
+				if (IS_ERR(tx_frame)) {
+					/* Return failure */
+					return (PTR_ERR(tx_frame));
+				}
+
+				/* Add Date / Time broadcast frame 9 */
+				list_add_tail(&((FIOMSG_TX_FRAME *) (tx_frame))->elem, tx_frames);
 			}
-
-			/* Add Date / Time broadcast frame 9 */
-			list_add_tail( &((FIOMSG_TX_FRAME *)(tx_frame))->elem, tx_frames );
 
 			/* Add outputs transfer request frame 18 */
-			tx_frame = fioman_ready_frame_18( p_fiod );
-			if ( IS_ERR( tx_frame ) ) {
-				/* Return failure */
-				return ( PTR_ERR( tx_frame ) );
-			}
+			if(!fioman_frame_is_scheduled_on_port(p_fiod, FIOMAN_FRAME_NO_18)) {
+				tx_frame = fioman_ready_frame_18(p_fiod);
+				if (IS_ERR(tx_frame)) {
+					/* Return failure */
+					return (PTR_ERR(tx_frame));
+				}
 
-			if (tx_frame)
-				list_add_tail( &((FIOMSG_TX_FRAME *)(tx_frame))->elem, tx_frames );
+				if (tx_frame)
+					list_add_tail(&((FIOMSG_TX_FRAME *) (tx_frame))->elem, tx_frames);
+			}
 			break;
 		}
 
