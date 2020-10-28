@@ -1175,7 +1175,7 @@ This function is used to actually send a request frame.
 /*****************************************************************************/
 
 /* TEG */
-static	int cnt = 0;
+/*static	int cnt = 0;*/
 /* TEG */
 void
 fiomsg_tx_send_frame
@@ -1192,8 +1192,8 @@ fiomsg_tx_send_frame
 	if( (status = sdlc_kernel_write(p_port->context, FIOMSG_PAYLOAD(p_tx_frame), p_tx_frame->len)) < 0 )
 		printk( KERN_ALERT "write error %d", status );
 	/* TEG */
-	FIOMSG_FRAME	*p_payload = FIOMSG_PAYLOAD( p_tx_frame );
-	// printk( KERN_ALERT "Frame (%d, %d) sending, jiffies(%llu)\n", p_payload->frame_no, cnt++, FIOMSG_CURRENT_TIME.tv64 );
+	/*FIOMSG_FRAME	*p_payload = FIOMSG_PAYLOAD( p_tx_frame );
+	printk( KERN_ALERT "Frame (%d, %d) sending, jiffies(%llu)\n", p_payload->frame_no, cnt++, FIOMSG_CURRENT_TIME.tv64 );*/
 	/* TEG */
 }
 
