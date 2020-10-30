@@ -68,14 +68,14 @@ struct dst_info
 
 typedef	struct dst_info	dst_info_t;
 
-enum
+enum TOD_TIMESRC_ENUM
 {
 	TOD_TIMESRC_LINESYNC,
 	TOD_TIMESRC_RTCSQWR,
 	TOD_TIMESRC_CRYSTAL,
 	TOD_TIMESRC_EXTERNAL1,
 	TOD_TIMESRC_EXTERNAL2
-} TOD_TIMESRC_ENUM;
+};
 
 char *tod_apiver(void);
 
