@@ -32,9 +32,11 @@
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include <atc.h>
 #include <linux/rtc.h>
 #include "tod.h"
+#include "tzfile.h"
 
 #ifndef __isdigit_char
 #define __isdigit_char(c)   (((unsigned char)((c) - '0')) <= 9)  
@@ -43,6 +45,28 @@
 #define __isleap(y) ( !((y) % 4) && ( ((y) % 100) || !((y) %400) ) )
 #endif
 
+static int g_is_tzif_cached = 0;
+static long g_timezone;
+static int g_daylight;
+static dst_info_t g_dst_info;
+
+static int read_dst(dst_info_t*);
+
+static void read_tzif() {
+	if(g_is_tzif_cached == 0) {
+		tzset();
+		g_timezone = timezone;
+		g_daylight = daylight;
+		if(daylight) {
+			read_dst(&g_dst_info);
+		}
+// glibc/uclibc will modify timezone/daylight based on current /etc/localtime
+// musl will only modify timezone/daylight once at program start
+#if !defined(__GNU_LIBRARY__) && !defined(__UCLIBC__)
+		g_is_tzif_cached = 1;
+#endif
+	}
+}
 
 char *tod_apiver(void)
 {
@@ -413,13 +437,24 @@ ILLEGAL:
 
 int tod_get_dst_info(dst_info_t *dst_info)
 {
+	read_tzif();
+	if(g_dst_info.type == 1) {
+		*dst_info = g_dst_info;
+		return 0;
+	}
+	return -1;
+}
+
+int read_dst(dst_info_t *dst_info)
+{
 	rule_struct new_rules[2];
 
-	if ((dst_info == NULL)
-		|| (get_dst_rules(new_rules) == -1)
-		|| (new_rules[1].tzname[0] == 0)) {
+	if ((dst_info == NULL) || (get_dst_rules(new_rules) == -1)) {
 		// Error getting DST rule info or no rule in place
 		errno = EINVAL;
+		return -1;
+	} else if (new_rules[1].tzname[0] == 0) {
+		errno = ENOENT;
 		return -1;
 	}
 		
@@ -465,173 +500,360 @@ int tod_get_dst_info(dst_info_t *dst_info)
 	return 0;
 }
 
-int tod_set_dst_info(const dst_info_t *dst_info)
+void to_tzif2(const int32_t val, char * const buf)
 {
-	char buf[64+TZ_BUFLEN] = {'T','Z','i','f','2', 0};
-	char *tzstr = &buf[54];
-	int fd;
-	int begin_month, begin_day, begin_occ;
-	int end_month, end_day, end_occ;
-	
-	if (dst_info == NULL) {
-		errno = EINVAL;
-		return -1;
+	int i;
+	for (i=0; i<4; i++) {
+		buf[3-i] = val>>(i*8);
+	}
+}
+
+void to_tzif2_64(const int64_t val, char * const buf)
+{
+	int i;
+	for (i=0; i<8; i++) {
+		buf[7-i] = val>>(i*8);
+	}
+}
+
+static const int mon_lengths[2][MONSPERYEAR] = {
+        { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
+        { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+};
+
+static const int year_lengths[2] = {
+        DAYSPERNYEAR, DAYSPERLYEAR
+};
+
+static int32_t
+transtime(const int year, register const struct rule *const rulep,
+	  const int32_t offset)
+{
+	register bool leapyear;
+	register int32_t value = 0;
+	register int i;
+	int d, m1, y, yy0, yy1, yy2, dow;
+
+	leapyear = isleap(year);
+	switch (rulep->r_type) {
+
+	case JULIAN_DAY:
+		/*
+		** Jn - Julian day, 1 == January 1, 60 == March 1 even in leap
+		** years.
+		** In non-leap years, or if the day number is 59 or less, just
+		** add SECSPERDAY times the day number-1 to the time of
+		** January 1, midnight, to get the day.
+		*/
+		value = (rulep->r_day - 1) * SECSPERDAY;
+		if (leapyear && rulep->r_day >= 60)
+			value += SECSPERDAY;
+		break;
+
+	case DAY_OF_YEAR:
+		/*
+		** n - day of year.
+		** Just add SECSPERDAY times the day number to the time of
+		** January 1, midnight, to get the day.
+		*/
+		value = rulep->r_day * SECSPERDAY;
+		break;
+
+	case MONTH_NTH_DAY_OF_WEEK:
+		/*
+		** Mm.n.d - nth "dth day" of month m.
+		*/
+
+		/*
+		** Use Zeller's Congruence to get day-of-week of first day of
+		** month.
+		*/
+		m1 = (rulep->r_mon + 9) % 12 + 1;
+		yy0 = (rulep->r_mon <= 2) ? (year - 1) : year;
+		yy1 = yy0 / 100;
+		yy2 = yy0 % 100;
+		dow = ((26 * m1 - 2) / 10 +
+			1 + yy2 + yy2 / 4 + yy1 / 4 - 2 * yy1) % 7;
+		if (dow < 0)
+			dow += DAYSPERWEEK;
+
+		/*
+		** "dow" is the day-of-week of the first day of the month. Get
+		** the day-of-month (zero-origin) of the first "dow" day of the
+		** month.
+		*/
+		d = rulep->r_day - dow;
+		if (d < 0)
+			d += DAYSPERWEEK;
+		for (i = 1; i < rulep->r_week; ++i) {
+			if (d + DAYSPERWEEK >=
+				mon_lengths[leapyear][rulep->r_mon - 1])
+					break;
+			d += DAYSPERWEEK;
+		}
+
+		/*
+		** "d" is the day-of-month (zero-origin) of the day we want.
+		*/
+		value = d * SECSPERDAY;
+		for (i = 0; i < rulep->r_mon - 1; ++i)
+			value += mon_lengths[leapyear][i] * SECSPERDAY;
+		break;
 	}
 
-	// Initially we convert to POSIX TZ string only.
-	// Initially we support generic rules of type "nth weekday of month"
-	// or "last weekday of month", which covers vast majority of cases.
-	if (dst_info->type) {
-		// generic rules defined
+	/* Add seconds since EPOCH to start of year in question */
+	for(y=1970; y<year; y++) {
+		value += isleap(y)?(366*24*60*60):(365*24*60*60);
+	}
+
+	/*
+	** "value" is the year-relative time of 00:00:00 UT on the day in
+	** question. To get the year-relative time of the specified local
+	** time on that day, add the transition time and the current offset
+	** from UT.
+	*/
+	return value + rulep->r_time + offset;
+}
+
+int set_tzif2(const dst_info_t *dst_info, int tz_offset, int dst_offset)
+{
+	char tzbuf[TZ_BUFLEN];
+	char *tzstr = tzbuf;
+	char tzif2buf[8];
+	int fd;
+	struct tzhead tzh = { .tzh_magic = TZ_MAGIC, .tzh_version = '2',
+		.tzh_ttisgmtcnt = {0, 0, 0, 1}, .tzh_ttisstdcnt = { 0, 0, 0, 1},
+		.tzh_typecnt = {0, 0, 0, 1}, .tzh_charcnt = {0, 0, 0, 6} };
+	struct rule dst_rule = { .r_type = MONTH_NTH_DAY_OF_WEEK };
+	struct rule std_rule = { .r_type = MONTH_NTH_DAY_OF_WEEK };
+	int64_t transition_times[2*(2038-2019)];
+	int i;
+	int pass;
+
+	// Create POSIX-sytle TZ string
+	// Fill std offset from "timezone" global
+	tzstr += sprintf(tzstr, "\nATCST%2.2ld:%2.2ld:%2.2ld",
+		tz_offset/3600, (tz_offset%3600)/60, (tz_offset%3600)%60);
+
+	if (dst_info != NULL) {
+		to_tzif2(2, tzh.tzh_ttisgmtcnt);
+		to_tzif2(2, tzh.tzh_ttisstdcnt);
+		to_tzif2(2, tzh.tzh_typecnt);
+		to_tzif2(12, tzh.tzh_charcnt);
+		dst_rule.r_time = dst_info->begin.generic.secs_from_midnight_to_transition;
+		std_rule.r_time = dst_info->end.generic.secs_from_midnight_to_transition;
 		// We need Month, DOW, occurence number
-		begin_month = dst_info->begin.generic.month;
+		dst_rule.r_mon = dst_info->begin.generic.month;
 		if ((dst_info->begin.generic.dom_type == 1)
 			&& (dst_info->begin.generic.generic_dom.forward_occurrences_of_dow.on_after_dom < 2)) {
 			// nth occurence of day from beginning of month
-			begin_day = dst_info->begin.generic.generic_dom.forward_occurrences_of_dow.dow;
-			begin_occ = dst_info->begin.generic.generic_dom.forward_occurrences_of_dow.occur;
+			dst_rule.r_day = dst_info->begin.generic.generic_dom.forward_occurrences_of_dow.dow;
+			dst_rule.r_week = dst_info->begin.generic.generic_dom.forward_occurrences_of_dow.occur;
 		} else if ((dst_info->begin.generic.dom_type == 2)
 			&& (dst_info->begin.generic.generic_dom.reverse_occurrences_of_dow.on_before_dom == 0)
 			&& (dst_info->begin.generic.generic_dom.reverse_occurrences_of_dow.occur == 1)) {
 			// last occurence of day from end of month
-			begin_day = dst_info->begin.generic.generic_dom.reverse_occurrences_of_dow.dow;
-			begin_occ = 5;
+			dst_rule.r_day = dst_info->begin.generic.generic_dom.reverse_occurrences_of_dow.dow;
+			dst_rule.r_week = 5;
 		} else {
 			//error can't represent?
 			errno = EINVAL;
 			return -1;
 		}
-		end_month = dst_info->end.generic.month;
+		std_rule.r_mon = dst_info->end.generic.month;
 		if ((dst_info->end.generic.dom_type == 1)
 			&& (dst_info->end.generic.generic_dom.forward_occurrences_of_dow.on_after_dom < 2)) {
 			// nth occurence of day from beginning of month
-			end_day = dst_info->end.generic.generic_dom.forward_occurrences_of_dow.dow;
-			end_occ = dst_info->end.generic.generic_dom.forward_occurrences_of_dow.occur;
+			std_rule.r_day = dst_info->end.generic.generic_dom.forward_occurrences_of_dow.dow;
+			std_rule.r_week = dst_info->end.generic.generic_dom.forward_occurrences_of_dow.occur;
 		} else if ((dst_info->end.generic.dom_type == 2)
 			&& (dst_info->end.generic.generic_dom.reverse_occurrences_of_dow.on_before_dom == 0)
 			&& (dst_info->end.generic.generic_dom.reverse_occurrences_of_dow.occur == 1)) {
 			// last occurence of day from end of month
-			end_day = dst_info->end.generic.generic_dom.reverse_occurrences_of_dow.dow;
-			end_occ = 5;
+			std_rule.r_day = dst_info->end.generic.generic_dom.reverse_occurrences_of_dow.dow;
+			std_rule.r_week = 5;
 		} else {
 			//error can't represent?
 			errno = EINVAL;
 			return -1;
 		}
-		// Fill std offset from "timezone" global
-		tzstr += sprintf(tzstr, "\nATCST%2.2ld:%2.2ld:%2.2ld",
-			timezone/3600, (timezone%3600)/60, (timezone%3600)%60);
+		
+		// Append DST rule to POSIX-style TZ string
 		// Fill dst offset
 		tzstr += sprintf(tzstr, "ATCDT%2.2ld:%2.2ld:%2.2ld",
-			(timezone - dst_info->begin.generic.seconds_to_adjust)/3600,
-			((timezone - dst_info->begin.generic.seconds_to_adjust)%3600)/60,
-			((timezone - dst_info->begin.generic.seconds_to_adjust)%3600)%60);
+			(tz_offset - dst_offset)/3600,
+			((tz_offset - dst_offset)%3600)/60,
+			((tz_offset - dst_offset)%3600)%60);
 		// Fill begin dst rule
 		tzstr += sprintf(tzstr, ",M%d.%d.%d/%2.2d:%2.2d:%2.2d",
-			begin_month,
-			begin_occ,
-			begin_day,
-			dst_info->begin.generic.secs_from_midnight_to_transition/3600,
-			(dst_info->begin.generic.secs_from_midnight_to_transition%3600)/60,
-			(dst_info->begin.generic.secs_from_midnight_to_transition%3600)%60);
+			dst_rule.r_mon,
+			dst_rule.r_week,
+			dst_rule.r_day,
+			dst_rule.r_time/3600,
+			(dst_rule.r_time%3600)/60,
+			(dst_rule.r_time%3600)%60);
 		// Fill end dst rule
-		tzstr += sprintf(tzstr, ",M%d.%d.%d/%2.2d:%2.2d:%2.2d\n",
-			end_month,
-			end_occ,
-			end_day,
-			dst_info->end.generic.secs_from_midnight_to_transition/3600,
-			(dst_info->end.generic.secs_from_midnight_to_transition%3600)/60,
-			(dst_info->end.generic.secs_from_midnight_to_transition%3600)%60);
-		// Write to temp file
-		fd = open("/etc/localtime~", O_RDWR|O_CREAT|O_TRUNC);
-		if (fd >= 0) {
-			write(fd, buf, (tzstr-buf));
-			fsync(fd);
-			close(fd);
+		tzstr += sprintf(tzstr, ",M%d.%d.%d/%2.2d:%2.2d:%2.2d",
+			std_rule.r_mon,
+			std_rule.r_week,
+			std_rule.r_day,
+			std_rule.r_time/3600,
+			(std_rule.r_time%3600)/60,
+			(std_rule.r_time%3600)%60);
+
+		// Create array of transition times for years 2019-2038
+		for (i=0; i<(2038-2019); i++) {
+			transition_times[i*2] = transtime((2019+i), &dst_rule, tz_offset);
+			transition_times[(i*2)+1] = transtime((2019+i), &std_rule, tz_offset-dst_offset);
+		} 
+	}
+	
+	// Write TZif2 data to /etc/localtime
+	remove("/etc/localtime");
+	fd = open("/etc/localtime", O_RDWR|O_CREAT|O_TRUNC,
+			S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);	
+	if (!fd)
+		return -1;
+	
+	// TZif2 requires 32-bit data followed by 64-bit version of same 
+	for (pass = 1; pass <= 2; ++pass) {
+		write(fd, tzh.tzh_magic, sizeof tzh.tzh_magic);
+		write(fd, tzh.tzh_version, sizeof tzh.tzh_version);
+		write(fd, tzh.tzh_reserved, sizeof tzh.tzh_reserved);
+		write(fd, tzh.tzh_ttisgmtcnt, sizeof tzh.tzh_ttisgmtcnt);
+		write(fd, tzh.tzh_ttisstdcnt, sizeof tzh.tzh_ttisstdcnt);
+		write(fd, tzh.tzh_leapcnt, sizeof tzh.tzh_leapcnt);
+		if (dst_info != NULL) {
+			// calculate timecnt as (rules per year)*(years to 2038), i.e. 2019 to 2038
+			to_tzif2( 2*(2038-2019), tzh.tzh_timecnt);
+			write(fd, tzh.tzh_timecnt, sizeof tzh.tzh_timecnt);
+			write(fd, tzh.tzh_typecnt, sizeof tzh.tzh_typecnt);
+			write(fd, tzh.tzh_charcnt, sizeof tzh.tzh_charcnt);
+			// write out timecnt # of transition time_t values
+			for (i=0; i<(2038-2019); i++) {
+				if (pass == 1) {
+					to_tzif2(transition_times[i*2], tzif2buf);
+					to_tzif2(transition_times[(i*2)+1], &tzif2buf[4]);
+					write(fd, tzif2buf, 8);
+				} else {
+					to_tzif2_64(transition_times[i*2], tzif2buf);
+					write(fd, tzif2buf, 8);
+					to_tzif2_64(transition_times[(i*2)+1], tzif2buf);
+					write(fd, tzif2buf, 8);
+				}
+			}
+			// write out timecnt # of type values for the above transitions
+			for (i=0; i<(2038-2019); i++) {
+				tzif2buf[0] = 0;
+				tzif2buf[1] = 1; 
+				write(fd, tzif2buf, 2);
+			}
+			// write out the dst offset ttinfo entry
+			to_tzif2(-tz_offset + dst_offset, tzif2buf);
+			tzif2buf[4] = 1;
+			tzif2buf[5] = 0;
+			write(fd, tzif2buf, 6);
+			// write out the std offset ttinfo entry
+			to_tzif2(-tz_offset, tzif2buf);
+			tzif2buf[4] = 0;
+			tzif2buf[5] = 6;
+			write(fd, tzif2buf, 6);
+			// write the rule names
+			sprintf(tzif2buf, "ATCDT");
+			write(fd, tzif2buf, 6);
+			sprintf(tzif2buf, "ATCST");
+			write(fd, tzif2buf, 6);
+			// write std/wall indicators
+			tzif2buf[0] = tzif2buf[1] = '\0';
+			write(fd, tzif2buf, 2);
+			// write UT/local indicators
+			write(fd, tzif2buf, 2);
 		} else {
-			return -1;
+			write(fd, tzh.tzh_timecnt, sizeof tzh.tzh_timecnt);
+			write(fd, tzh.tzh_typecnt, sizeof tzh.tzh_typecnt);
+			write(fd, tzh.tzh_charcnt, sizeof tzh.tzh_charcnt);
+			// write out the std offset ttinfo entry
+			to_tzif2(-tz_offset, tzif2buf);
+			tzif2buf[4] = 0;
+			tzif2buf[5] = 0;
+			write(fd, tzif2buf, 6);
+			// write the rule names
+			sprintf(tzif2buf, "ATCST");
+			write(fd, tzif2buf, 6);
+			// write std/wall indicators
+			tzif2buf[0] = '\0';
+			write(fd, tzif2buf, 1);
+			// write UT/local indicators
+			write(fd, tzif2buf, 1);
 		}
-		// Rename to actual filename (or move to /usr/share/zoneinfo and link?)
-		if (rename("/etc/localtime~", "/etc/localtime") == -1)
-			return -1;
+	}
+
+	// write POSIX-style TZ string
+	*tzstr++ = '\n';
+	write(fd, tzbuf, (tzstr-tzbuf));
+	fsync(fd);
+	close(fd);
+
+	// Rename to actual filename (or move to /usr/share/zoneinfo and link?)
+	//if (rename("/etc/localtime~", "/etc/localtime") == -1)
+	//	return -1;
+
+	return 0;
+}
+
+static int write_tzif() {
+	if((g_daylight != 0) && (g_dst_info.type == 1)) {
+		return set_tzif2(&g_dst_info, g_timezone, g_dst_info.begin.generic.seconds_to_adjust);
 	} else {
-		// absolute rules defined
+		return set_tzif2(NULL, g_timezone, 0);
+	}
+}
+
+int tod_set_dst_info(const dst_info_t *dst_info)
+{
+	read_tzif();
+	if (dst_info == NULL) {
+		g_dst_info.type = 0;
 		errno = EINVAL;
 		return -1;
 	}
-	
-	return 0;
+	g_dst_info = *dst_info;
+	return write_tzif();
 }
 
 int tod_get_dst_state(void)
 {
-	tzset();
-	return (daylight?1:0);
+	read_tzif();
+	return (g_daylight?1:0);
 }
 
 int tod_set_dst_state(int state)
 {
-	struct stat sb;
-	char buf[64+TZ_BUFLEN] = {'T','Z','i','f','2', 0};
-	char *tzstr = &buf[54];
-	int fd;
-
-	// if we enable dst, where do we get the rules from?
-	// if we disable dst, where do we store the rules?
-	
-	tzset();
-	if (!state != !daylight) {
-		// We must set or remove the DST rule but preserve any existing timezone
-		// is /etc/localtime present?
-		if (stat("/etc/localtime", &sb) == 0) {
-			// Fill std offset from "timezone" global
-			tzstr += sprintf(tzstr, "\nATCST%2.2ld:%2.2ld:%2.2ld",
-				timezone/3600, (timezone%3600)/60, (timezone%3600)%60);
-
-			if (state) {
-				// use USA rule (from Energy Policy Act of 2005)
-				tzstr += sprintf(tzstr, "ATCDT,M3.2.0,M11.1.0");
-			}
-			*tzstr++ = '\n';
-			// Write to temp file
-			fd = open("/etc/localtime~", O_RDWR|O_CREAT|O_TRUNC);
-			if (fd >= 0) {
-				write(fd, buf, (tzstr-buf));
-				fsync(fd);
-				close(fd);
-			} else {
-				return -1;
-			}
-			// Rename to actual filename (or move to /usr/share/zoneinfo and link?)
-			if (rename("/etc/localtime~", "/etc/localtime") == -1)
-				return -1;			
-			// Update globals with new timezone
-			tzset();
-		}
-	}
-	
-	return 0;
+	read_tzif();
+	g_daylight = state;
+	return write_tzif();
 }
-
 
 int tod_get(struct timeval *tv, int *tzsec_off, int *dst_off)
 {
 	struct tm local_time;
 	struct timeval utc;
 	
-	gettimeofday(&utc, NULL);
-	tzset();
-	localtime_r(&utc.tv_sec, &local_time);
+	read_tzif();
+	if ((tv != NULL) || (dst_off != NULL)) {
+		gettimeofday(&utc, NULL);
+		tzset();
+		localtime_r(&utc.tv_sec, &local_time);
+	}
 	if (tv != NULL) {
-		tv->tv_sec = utc.tv_sec - timezone + ((daylight && local_time.tm_isdst)?3600:0);
-                tv->tv_usec = utc.tv_usec;
+		*tv = utc;
 	}
 	if (tzsec_off != NULL) {
-		*tzsec_off = -timezone;
+		*tzsec_off = -g_timezone;
 	}
 	if (dst_off != NULL) {
 		/* Correct for all but the 360 residents of Lord Howe Island! */
-		*dst_off = ((daylight && local_time.tm_isdst)?3600:0);
+		*dst_off = ((g_daylight && local_time.tm_isdst)?3600:0);
 	}
 
 	return 0;
@@ -639,108 +861,46 @@ int tod_get(struct timeval *tv, int *tzsec_off, int *dst_off)
 
 int tod_set(const struct timeval *tv, const int *tzsec_off)
 {
-	struct stat sb;
-	struct timeval tval;
-        struct tm tm;
-	rule_struct dst_rules[2];
-	char buf[64+TZ_BUFLEN] = {'T','Z','i','f','2', 0};
-	char *tzstr = &buf[54];
-	int tzoff, dstoff;
-	int fd;
+	struct timespec tsval;
+	struct tm tm;
+	int ret = 0;
 
+	read_tzif();
 	tzset();
-	if ((tzsec_off != NULL) && (*tzsec_off != -timezone)) {
-		// We must set the timezone offset but preserve any existing DST rule
-		
-		// Read existing DST Rule ?
-		// is /etc/localtime present?
-		if (stat("/etc/localtime", &sb) == 0) {
-			if (get_dst_rules(dst_rules) == -1)
-				return -1;
-			// modify rule info and rewrite
-			tzoff = -(*tzsec_off);
-			dstoff = tzoff - (dst_rules[0].gmt_offset - dst_rules[1].gmt_offset);
-			// Fill std offset
-			tzstr += sprintf(tzstr, "\nATCST%2.2d:%2.2d:%2.2d",
-				tzoff/3600, (tzoff%3600)/60, (tzoff%3600)%60);
-			// Fill dst rules, if any
-			if (!!dst_rules[1].tzname[0]) {
-				// Fill dst offset
-				tzstr += sprintf(tzstr, "ATCDT%2.2d:%2.2d:%2.2d",
-					dstoff/3600, (dstoff%3600)/60, (dstoff%3600)%60);
-				// Fill begin dst rule
-				tzstr += sprintf(tzstr, ",M%d.%d.%d/%2.2ld:%2.2ld:%2.2ld",
-					dst_rules[0].month,
-					dst_rules[0].week,
-					dst_rules[0].day,
-					dst_rules[0].dst_offset/3600,
-					(dst_rules[0].dst_offset%3600)/60,
-					(dst_rules[0].dst_offset%3600)%60);
-				// Fill end dst rule
-				tzstr += sprintf(tzstr, ",M%d.%d.%d/%2.2ld:%2.2ld:%2.2ld",
-					dst_rules[1].month,
-					dst_rules[1].week,
-					dst_rules[1].day,
-					dst_rules[1].dst_offset/3600,
-					(dst_rules[1].dst_offset%3600)/60,
-					(dst_rules[1].dst_offset%3600)%60);
-			}
-			*tzstr++ = '\n';
-			// Write to temp file
-			fd = open("/etc/localtime~", O_RDWR|O_CREAT|O_TRUNC);
-			if (fd >= 0) {
-				write(fd, buf, (tzstr-buf));
-				fsync(fd);
-				close(fd);
-			} else {
-				return -1;
-			}
-			// Rename to actual filename (or move to /usr/share/zoneinfo and link?)
-			if (rename("/etc/localtime~", "/etc/localtime") == -1)
-				return -1;			
-		}
-		// Update globals with new timezone
-		tzset();
+	if (tzsec_off != NULL) {
+		g_timezone = -(*tzsec_off);
+		ret = write_tzif();
 	}
 	
 	if (tv != NULL) {
-		tval = *tv;
-                if (tzsec_off == NULL)
-                        tzset();
-                gmtime_r(&tval.tv_sec, &tm);
-                tm.tm_isdst = -1;
-                if (mktime(&tm) == -1)
-                        return -1;
-        tval.tv_sec += timezone - ((daylight && tm.tm_isdst)?3600:0);
-        //settimeofday(&tval, NULL);
-        struct timespec tp;
-        tp.tv_sec = tval.tv_sec;
-        tp.tv_nsec = 0;
-        clock_settime(CLOCK_REALTIME, &tp);
+		tsval.tv_sec = tv->tv_sec;
+		tsval.tv_nsec = tv->tv_usec * 1000;
+		if (clock_settime(CLOCK_REALTIME, &tsval) != 0)
+			return -1;
 
-        // HW RTC synced hourly, so update it now
-        time_t t_of_day = time(NULL);
-        struct tm gm_time;
-        gmtime_r(&t_of_day, &gm_time);
+		// HW RTC synced hourly, so update it now
+		time_t t_of_day = time(NULL);
+		struct tm gm_time;
+		gmtime_r(&t_of_day, &gm_time);
 
-        int fd = open("/dev/rtc0", O_RDONLY);
-        if (fd >= 0)
-        {
-            struct rtc_time rtc;
-            rtc.tm_sec = gm_time.tm_sec;
-            rtc.tm_min = gm_time.tm_min;
-            rtc.tm_hour = gm_time.tm_hour;
-            rtc.tm_mday = gm_time.tm_mday;
-            rtc.tm_mon = gm_time.tm_mon;
-            rtc.tm_year = gm_time.tm_year;
-            rtc.tm_wday = gm_time.tm_wday;
-            rtc.tm_yday = gm_time.tm_yday;
-            rtc.tm_isdst = gm_time.tm_isdst;
-            ioctl(fd, RTC_SET_TIME, &rtc);
-            close(fd);
-        }
+		int fd = open("/dev/rtc0", O_RDONLY);
+		if (fd >= 0)
+		{
+			struct rtc_time rtc;
+			rtc.tm_sec = gm_time.tm_sec;
+			rtc.tm_min = gm_time.tm_min;
+			rtc.tm_hour = gm_time.tm_hour;
+			rtc.tm_mday = gm_time.tm_mday;
+			rtc.tm_mon = gm_time.tm_mon;
+			rtc.tm_year = gm_time.tm_year;
+			rtc.tm_wday = gm_time.tm_wday;
+			rtc.tm_yday = gm_time.tm_yday;
+			rtc.tm_isdst = gm_time.tm_isdst;
+			ioctl(fd, RTC_SET_TIME, &rtc);
+			close(fd);
+		}
 	}
-	return 0;
+	return ret;
 }
 
 

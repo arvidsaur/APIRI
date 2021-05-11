@@ -56,8 +56,6 @@
 
 #include "crc_ccitt.h"
 
-#define TZCONFIG_FILE	"/etc/localtime"
-
 /* Procedures used by the SC module */
 int start_sc_module(char *);
 int init_internal_screen(int screen_id);
@@ -1096,8 +1094,6 @@ fpui_set_cursor(display_data.file_descr, false);
 		time_t t_of_day;
 		struct timeval time_sec;
 		int local_tz = 0;
-		char tzVar[128];
-		char *dstVar = &tzVar[54];
 		bool time_is_changed = false; /* Flag to indicate if some date/time field is modified. */
 
 		/* For the moment we commit only the modified fields from the date-time line. */
@@ -1183,42 +1179,17 @@ fpui_set_cursor(display_data.file_descr, false);
 				pCrt_field->internal_data = pCrt_field->temp_data;
 				time_is_changed = true;
 			}
-                }
-		
+		}
+
 		if (time_is_changed)
 		{
 			/* Update the new date-time to the system. */
 			t_of_day = mktime(&local_time);
 
-			struct timespec tp;
-			tp.tv_sec = t_of_day;
-			tp.tv_nsec = 0;
-			if(clock_settime(CLOCK_REALTIME, &tp) != 0) {
-				/* TODO: Handle some commit errors here. */
-				break;
-			}
-
-			// HW RTC synced hourly, so update it now
-			t_of_day = time(NULL);
-			pLocalDateTime = gmtime(&t_of_day);
-			struct tm gm_time = *pLocalDateTime;
-
-			int fd = open("/dev/rtc0", O_RDONLY);
-			if (fd >= 0)
-			{
-				struct rtc_time rtc;
-				rtc.tm_sec = gm_time.tm_sec;
-				rtc.tm_min = gm_time.tm_min;
-				rtc.tm_hour = gm_time.tm_hour;
-				rtc.tm_mday = gm_time.tm_mday;
-				rtc.tm_mon = gm_time.tm_mon;
-				rtc.tm_year = gm_time.tm_year;
-				rtc.tm_wday = gm_time.tm_wday;
-				rtc.tm_yday = gm_time.tm_yday;
-				rtc.tm_isdst = gm_time.tm_isdst;
-				ioctl(fd, RTC_SET_TIME, &rtc);
-				close(fd);
-			}
+			struct timeval tv;
+			tv.tv_sec = t_of_day;
+			tv.tv_usec = 0;
+			tod_set(&tv, NULL);
 		}
 
 		/* See if the timezone/DST settings are changed */
@@ -1242,37 +1213,56 @@ fpui_set_cursor(display_data.file_descr, false);
 				char c;
 				sscanf((char *)(pCrt_line->line + pCrt_line->fields[ZONE_SIGN_FIELD].start),
 					"%c", &c);
-				if (c != SC_INPUT_MINUS)
+				if (c == SC_INPUT_MINUS)
 					local_tz = -local_tz;
 				if ( ((pCrt_line->fields[DST_ENABLE_FIELD].type == kModified) ||
 					(pCrt_line->fields[DST_ENABLE_FIELD].type == kModified2))
 					|| (local_tz != timezone) )
 				{
-					// test if /usr/share/zoneinfo present and link to matching tzfile if so.
-					// else convert to POSIX and write out to /etc/localtime
-					sprintf(tzVar,"TZif2");
-					*dstVar++ = '\n';
-					dstVar += sprintf(dstVar, "ATCST%2.2d:%2.2d:%2.2d",
-						(local_tz/3600), ((local_tz%3600)/60),
-						((local_tz%3600)%60));
+					tod_set(NULL, &local_tz);
+
 					// cannot infer the dst rule, assume the most likely (usa rule)
 					if (pCrt_line->fields[DST_ENABLE_FIELD].temp_data) {
-						dstVar += sprintf(dstVar, "ATCDT,M3.2.0,M11.1.0");
+                                            dst_info_t info;
+                                            memset(&info, 0, sizeof(info));
+
+                                            info.type = 1;
+
+                                            info.begin.generic.secs_from_midnight_to_transition = 2 * SECSPERHOUR;
+                                            info.end.generic.secs_from_midnight_to_transition = 2 * SECSPERHOUR;
+
+                                            info.begin.generic.seconds_to_adjust = 1 * SECSPERHOUR;
+
+                                            // Starts second Sunday of March
+                                            info.begin.generic.dom_type = 1;
+                                            info.begin.generic.month = 3;
+                                            info.begin.generic.generic_dom.forward_occurrences_of_dow.occur = 2;
+                                            info.begin.generic.generic_dom.forward_occurrences_of_dow.dow = 0;
+                                            info.begin.generic.generic_dom.forward_occurrences_of_dow.on_after_dom = 0;
+
+                                            // End first Sunday of November
+                                            info.end.generic.dom_type = 1;
+                                            info.end.generic.month = 11;
+                                            info.end.generic.generic_dom.forward_occurrences_of_dow.occur = 1;
+                                            info.end.generic.generic_dom.forward_occurrences_of_dow.dow = 0;
+                                            info.end.generic.generic_dom.forward_occurrences_of_dow.on_after_dom = 0;
+
+                                            tod_set_dst_info(&info);
+
+                                            tod_set_dst_state(1);
 					}
-					*dstVar++ ='\n';
-					FILE* file = fopen(TZCONFIG_FILE, "wb");
-					if (file != NULL) {
-						fwrite(tzVar, sizeof(char), (dstVar-tzVar), file);
-						fclose(file);
-					}
+					else
+                                        {
+					    tod_set_dst_state(0);
+                                        }
 				}
 			}
 			pCrt_line->fields[ZONE_HOUR_FIELD].internal_data = pCrt_line->fields[ZONE_HOUR_FIELD].temp_data;
 			pCrt_line->fields[ZONE_MIN_FIELD].internal_data = pCrt_line->fields[ZONE_MIN_FIELD].temp_data;
 			pCrt_line->fields[ZONE_SIGN_FIELD].internal_data = pCrt_line->fields[ZONE_SIGN_FIELD].temp_data;
 			pCrt_line->fields[DST_ENABLE_FIELD].internal_data = pCrt_line->fields[DST_ENABLE_FIELD].temp_data;
-                }
-		break;
+		}
+                break;
 	}
 
 	case ETH1_SCREEN_ID:
