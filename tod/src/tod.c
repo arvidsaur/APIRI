@@ -70,7 +70,7 @@ static void read_tzif() {
 
 char *tod_apiver(void)
 {
-	return "APIRI, 1.1, 2.17";
+	return "Econolite, 1.0, 2.17";
 }
 
 int tod_ioctl_call(int command, int arg)
