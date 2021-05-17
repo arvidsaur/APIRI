@@ -616,7 +616,7 @@ fiomsg_rx_set_port_timer
 		p_timer->function = fiomsg_rx_task;
 
 		if(FIOMSG_PAYLOAD( p_tx_frame )->frame_no >= 20 && FIOMSG_PAYLOAD( p_tx_frame )->frame_no <= 27) {
-			next_when.tv64 = next_when.tv64 - 1000000; // 1000 microseconds before read op
+			next_when = FIOMSG_TIME_SUB_USECS(next_when, 1000); // 1000 microseconds before read op
 		}
 
 		/* Set the timer to go off when the response should be totally RXed */

@@ -91,6 +91,7 @@ typedef struct hrtimer			FIOMSG_TIMER;
 #define FIOMSG_TIME_ADD_NSECS(a,b)	ktime_add_ns(a,b)
 #define FIOMSG_TIME_ADD_USECS(a,b)	ktime_add_us(a,b)
 #define FIOMSG_TIME_ADD(a,b)		ktime_add_ns(a,b)
+#define FIOMSG_TIME_SUB_USECS(a,b)	ktime_sub_us(a,b)
 #define FIOMSG_TIME_SUB(a,b)		ktime_sub(a,b)
 #define FIOMSG_TIME_MOD(a,b)		((long)ktime_to_ns(a) % b)
 #define FIOMSG_TIME_ALIGN(a,b)          ({ u32 _tmp = ktime_to_ms(a); \
@@ -114,6 +115,7 @@ typedef struct timer_list		FIOMSG_TIMER;
 #define FIOMSG_TIME_ADD_NSECS(a,b)	(a + nsecs_to_jiffies(b))
 #define FIOMSG_TIME_ADD_USECS(a,b)	(a + usecs_to_jiffies(b))
 #define FIOMSG_TIME_ADD(a,b)		(a + b)
+#define FIOMSG_TIME_SUB_USECS(a,b)	(a - usecs_to_jiffies(b))
 #define FIOMSG_TIME_SUB(a,b)		(a - b)
 #define FIOMSG_TIME_MOD(a,b)		(a % b)
 #define FIOMSG_TIME_ALIGN(a,b)          (a = a - (a % (HZ/b)))
